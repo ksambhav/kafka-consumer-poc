@@ -26,7 +26,7 @@ public final class DispatcherKafklet implements Runnable {
     private AtomicBoolean started = new AtomicBoolean(false);
     private KafkaConsumer<String, String> kafkaConsumer;
     private final Map<String, ExecutorService> workerPoolByTopic;
-
+    private final AtomicBoolean refresh = new AtomicBoolean(false);
 
     static {
         consumerRebalanceListener = new ConsumerRebalanceListener() {
@@ -65,10 +65,7 @@ public final class DispatcherKafklet implements Runnable {
     public void subscribe(String topic) throws InterruptedException {
         log.debug("will try to subscribe to {}", topic);
         subscribedTopics.add(topic);
-        if (kafkaConsumer != null) {
-            kafkaConsumer.subscribe(subscribedTopics, consumerRebalanceListener);
-        }
-        log.debug("successfully subscribed to topic {}", topic);
+        refresh.set(true);
     }
 
     public synchronized void start() throws InterruptedException {
@@ -79,22 +76,22 @@ public final class DispatcherKafklet implements Runnable {
             log.debug("starting DispatcherKafklet");
             try (KafkaConsumer<String, String> kafkaConsumer = new KafkaConsumer<>(props)) {
                 this.kafkaConsumer = kafkaConsumer;
-                kafkaConsumer.subscribe(subscribedTopics);
-                log.debug("starting to poll");
+                while (subscribedTopics.isEmpty()) {
+                    log.debug("no topics subscribed yet, will wait");
+                    Thread.sleep(2000);
+                }
+                log.debug("starting poll loop");
                 while (started.get()) {
-                    if (subscribedTopics.isEmpty()) {
-                        log.debug("no topics subscribed yet");
-                        Thread.sleep(2000);
-                    } else {
-                        ConsumerRecords<String, String> records = kafkaConsumer.poll(2000);
-                        int count = records.count();
-                        log.debug("polled {} records", count);
-                        records.forEach(this::handleRecord);
+                    if (this.refresh.compareAndSet(true, false)) {
+                        kafkaConsumer.subscribe(subscribedTopics, consumerRebalanceListener);
                     }
+                    ConsumerRecords<String, String> records = kafkaConsumer.poll(2000);
+                    int count = records.count();
+                    log.debug("polled {} records", count);
+                    records.forEach(this::handleRecord);
                 }
                 kafkaConsumer.unsubscribe();
                 subscribedTopics.clear();
-
             } catch (Exception e) {
                 log.error("error while polling", e);
             } finally {
