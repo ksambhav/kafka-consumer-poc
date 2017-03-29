@@ -17,3 +17,5 @@ bin
 classes
 .gradle
 .idea
+build
+out
